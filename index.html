@@ -18,7 +18,7 @@
 <link href="https://fonts.googleapis.com/css2?family=Silkscreen:wght@400;700&display=swap" rel="stylesheet">
 <script>
 /* The version number lets the app notice when the website has been updated. Bump it with every change. */
-window.APP_VERSION = "2.0.0";
+window.APP_VERSION = "2.1.0";
 window.showFatal = function (title, detail) {
   var box = document.getElementById("fatal");
   if (!box) {
@@ -204,6 +204,22 @@ input[type=range]{width:100%;accent-color:var(--pink);margin:4px 0 16px}
 .modal-ico{width:64px;height:64px;border-radius:15px;background:#1a1528;display:grid;place-items:center}
 .modal-ico canvas{width:44px;height:32px;image-rendering:pixelated}
 
+.intro-top{display:flex;align-items:center;justify-content:space-between;margin-bottom:14px}
+.dots{display:flex;gap:6px}
+.dots i{width:8px;height:8px;border-radius:50%;background:var(--line)}
+.dots i.on{background:var(--pink);width:20px;border-radius:4px}
+.skip{font-size:15px;font-weight:600;color:var(--ink-2);padding:6px 4px}
+.modal-ico svg{width:34px;height:34px}
+.intro-body p,.intro-lead{font-size:16px !important;line-height:1.5 !important;color:var(--ink) !important;margin:0 0 12px !important}
+.intro-body{margin-bottom:12px}
+.inl{display:inline-flex;vertical-align:-4px;width:22px;height:22px;color:var(--apple)}
+.inl svg{width:22px;height:22px}
+.ilegend{display:flex;flex-direction:column;gap:8px;margin:0 0 14px}
+.ilegend .ilg{display:flex;align-items:center;gap:10px;font-size:16px}
+.ilegend canvas{width:30px;height:22px;image-rendering:pixelated}
+#modal ol.guide li{font-size:16px}
+#modal ol.guide li > div > b:first-child{display:block;font-size:17px;margin-bottom:4px}
+#modal ol.guide li p{margin:0 0 8px;color:var(--ink);font-size:16px;line-height:1.5}
 /* blue dot */
 .me{width:24px;height:24px;position:relative;pointer-events:none}
 .me-dot{position:absolute;inset:3px;border-radius:50%;background:var(--apple);border:3px solid #fff;box-shadow:0 1px 5px rgba(0,0,0,.35);z-index:3}
@@ -415,7 +431,7 @@ const store = {
 };
 try { navigator.storage?.persist?.(); } catch {}
 const flashed = new Set(store.get("flashed", []));
-const prefs = Object.assign({hideDestroyed: false, hideFlashed: false, locationOn: false, voice: true, alerts: true,
+const prefs = Object.assign({hideDestroyed: false, hideFlashed: false, locationOn: false, voice: true, alerts: true, loop: false,
   style: matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "streets"}, store.get("prefs", {}));
 const saveFlashed = () => store.set("flashed", [...flashed]);
 const savePrefs = () => store.set("prefs", prefs);
@@ -843,6 +859,7 @@ function openSettings() {
     </div>
     <label class="tog">Hide destroyed mosaics<input type="checkbox" id="tDes" ${prefs.hideDestroyed ? "checked" : ""}></label>
     <label class="tog">Hide ones I’ve flashed<input type="checkbox" id="tFl" ${prefs.hideFlashed ? "checked" : ""}></label>
+    <label class="tog">Speak directions out loud<input type="checkbox" id="tVoice" ${prefs.voice ? "checked" : ""}></label>
     <div class="legend">${S_NAME.map((n, i) => `<span data-l="${i}">${n}</span>`).join("")}<span data-l="f">Flashed</span></div>
     <div class="progress">
       <div class="big">${done.toLocaleString()} <span style="font-size:16px;color:var(--ink-2)">flashed</span></div>
@@ -856,7 +873,10 @@ function openSettings() {
       <button class="btn ghost" id="imp">Restore</button>
       <input type="file" id="impFile" accept=".json,.txt,.csv,text/*" hidden>
     </div>
-    ${IS_IOS && !STANDALONE ? `<div class="actions" style="margin-bottom:16px"><button class="btn ghost" id="howInstall">Add to Home Screen</button></div>` : ""}
+    <div class="actions" style="margin-bottom:16px">
+      ${IS_IOS && !STANDALONE ? `<button class="btn ghost" id="howInstall">Add to Home Screen</button>` : ""}
+      <button class="btn ghost" id="showIntro">Show the intro again</button>
+    </div>
     <p class="small">${IS_IOS ? `Tired of being asked for your location? In the Settings app go to Apps → Safari → Location and choose Allow.<br><br>` : ""}
       ${INV.length.toLocaleString()} mosaics in ${cities.length} places, from the community-built
       <a href="https://pnote.eu/projects/invaders/" target="_blank" rel="noopener">pnote.eu map</a> via the
@@ -875,6 +895,7 @@ function openSettings() {
   });
   $("#tDes").onchange = e => { prefs.hideDestroyed = e.target.checked; savePrefs(); refreshData(); };
   $("#tFl").onchange = e => { prefs.hideFlashed = e.target.checked; savePrefs(); refreshData(); };
+  $("#tVoice").onchange = e => { setVoice(e.target.checked); if (nav) renderNav(); };
   $("#impApp").onclick = openImport;
   $("#exp").onclick = () => {
     const blob = new Blob([JSON.stringify({flashed: [...flashed].sort(), exported: new Date().toISOString()}, null, 1)], {type: "application/json"});
@@ -890,7 +911,8 @@ function openSettings() {
     ids.forEach(id => flashed.add(id)); saveFlashed(); refreshData();
     toast(`Restored ${ids.length} flashed mosaics`); openSettings();
   };
-  const hi = $("#howInstall"); if (hi) hi.onclick = () => showInstall(true);
+  const hi = $("#howInstall"); if (hi) hi.onclick = () => { closeSheet(); showInstall(); };
+  $("#showIntro").onclick = () => { closeSheet(); showIntro(); };
 }
 function idsFromText(t) {
   const out = new Set();
@@ -933,18 +955,16 @@ async function fileToImageData(file) {
   return g.getImageData(0, 0, c.width, c.height);
 }
 async function runImport(files) {
-  const found = [], unknown = []; let unreadable = 0;
+  const found = [], unknown = [];
   for (let i = 0; i < files.length; i++) {
     openSheet("import", head("Reading screenshots…", `${i + 1} of ${files.length}`) + `<div class="bar"><i style="width:${(i / files.length * 100).toFixed(0)}%"></i></div>`);
     await new Promise(r => setTimeout(r, 30));
     try {
       const img = await fileToImageData(files[i]);
       for (const line of readGalleryLabels(img, GLYPH_TEMPLATES)) {
-        // "?" = a character we couldn't read, "|" = not a character at all (photo noise next to the label)
-        const m = line.text.match(/([A-Z?|]{1,5})_([0-9?]{1,4})(?![0-9?])/);
-        if (!m) { if (/_/.test(line.text)) unreadable++; continue; }
-        if (m[2].includes("?")) { unreadable++; continue; }
-        const prefix = m[1].replace(/\|/g, "?"), num = m[2], keys = line.keys.slice(m.index, m.index + prefix.length);
+        const m = line.text.match(/([A-Z?]{1,5})_(\d{1,4})/);
+        if (!m) continue;
+        const prefix = m[1], num = m[2], keys = line.keys.slice(m.index, m.index + prefix.length);
         if (!prefix.includes("?")) found.push({code: prefix, num});
         else unknown.push({prefix, num, keys});
       }
@@ -965,7 +985,7 @@ async function runImport(files) {
   }
   const ids = [], missing = [];
   for (const f of found) { const v = findId(f.code, f.num); v ? ids.push({id: v.id}) : missing.push(`${f.code}_${f.num}`); }
-  reviewImport(dedupe(ids), [...new Set(missing)], toAsk, files.length, unreadable);
+  reviewImport(dedupe(ids), [...new Set(missing)], toAsk, files.length);
 }
 const dedupe = list => [...new Map(list.map(x => [x.id, x])).values()];
 function learnPrefix(g, code) {
@@ -974,7 +994,7 @@ function learnPrefix(g, code) {
   [...code].forEach((ch, i) => { if (g.prefix[i] === "?" && u.keys[i]) { learned[u.keys[i]] = ch; (GLYPH_TEMPLATES[ch] = GLYPH_TEMPLATES[ch] || []).push(u.keys[i]); } });
   store.set("glyphs", learned);
 }
-function reviewImport(items, missing, toAsk = [], shots = 0, unreadable = 0) {
+function reviewImport(items, missing, toAsk = [], shots = 0) {
   const off = new Set();
   const render = () => {
     const fresh = items.filter(x => !flashed.has(x.id));
@@ -987,7 +1007,6 @@ function reviewImport(items, missing, toAsk = [], shots = 0, unreadable = 0) {
           <select class="field" data-ask="${i}" style="margin:8px 0 0"><option value="">Choose a city…</option>
           ${(g.fits.length ? g.fits : cities.map(c => c.code)).map(c => `<option value="${c}">${esc(CITY[c] || c)} (${c})</option>`).join("")}</select></div>`).join("")}
       <div class="chips">${items.map(x => `<button data-id="${esc(x.id)}" class="${off.has(x.id) ? "off" : flashed.has(x.id) ? "old" : ""}">${esc(x.id)}</button>`).join("")}</div>
-      ${unreadable ? `<p class="small">${unreadable} label${unreadable === 1 ? "" : "s"} couldn’t be read clearly. Try another screenshot where ${unreadable === 1 ? "it isn’t" : "they aren’t"} at the edge of the screen.</p>` : ""}
       ${missing.length ? `<p class="small">Not on this map yet, so they can’t be marked: ${missing.map(esc).join(", ")}</p>` : ""}
       <div class="actions" style="margin-top:12px">
         <button class="btn primary" id="impDo" ${count ? "" : "disabled"}>Mark ${count} as flashed</button>
@@ -1071,12 +1090,12 @@ const d = (a, b) => distM(a, b);
 const pathLen = pts => pts.reduce((s, p, i) => i ? s + d(pts[i-1], p) : 0, 0);
 const candidatesFor = (exclude = new Set()) => INV.filter(v => flashable(v) && !flashed.has(v.id) && !exclude.has(v.id));
 
-function twoOpt(p, fixedStart) {
+function twoOpt(p, fixedStart, fixedEnd) {
   const n = p.length; if (n < 4) return p;
   let improved = true, passes = 0;
   while (improved && passes++ < 60) {
     improved = false;
-    for (let i = fixedStart ? 1 : 0; i < n - 1; i++) for (let j = i + 1; j < n; j++) {
+    for (let i = fixedStart ? 1 : 0; i < n - 1; i++) for (let j = i + 1; j < (fixedEnd ? n - 1 : n); j++) {
       const a = i > 0 ? p[i-1] : null, b = p[i], c = p[j], e = j + 1 < n ? p[j+1] : null;
       const before = (a ? d(a, b) : 0) + (e ? d(c, e) : 0), after = (a ? d(a, c) : 0) + (e ? d(b, e) : 0);
       if (after < before - .5) { p.splice(i, j - i + 1, ...p.slice(i, j + 1).reverse()); improved = true; }
@@ -1084,7 +1103,7 @@ function twoOpt(p, fixedStart) {
   }
   return p;
 }
-function orderStops(start, stops) {
+function orderStops(start, stops, loop = false) {
   // nearest neighbour, then untangle
   const rest = stops.slice(), path = [];
   let cur = start || rest.reduce((best, v) => (v.lng < best.lng ? v : best), rest[0]);
@@ -1094,32 +1113,41 @@ function orderStops(start, stops) {
     rest.forEach((v, i) => { const dd = d(cur, v); if (dd < bd) { bd = dd; bi = i; } });
     cur = rest.splice(bi, 1)[0]; path.push(cur);
   }
+  if (loop) {
+    // a loop comes back to where it began: fix both ends while untangling
+    const home = start || path[0];
+    const full = start ? [start, ...path, home] : [...path, home];
+    twoOpt(full, true, true);
+    return start ? full.slice(1, -1) : full.slice(0, -1);
+  }
   const full = start ? [start, ...path] : path;
   twoOpt(full, !!start);
   return start ? full.slice(1) : full;
 }
 /* greedy "orienteering": keep adding the invader that costs the least extra walking until time runs out */
-function growRoute(start, cands, minutes, first) {
+function growRoute(start, cands, minutes, first, loop = false) {
   const path = [start]; const used = new Set();
   if (first) { path.push(first); used.add(first.id); }
+  if (loop) path.push(start);                 // the walk has to come back here
+  const extra = loop ? 2 : 1;                 // path entries that aren't invaders
   let len = pathLen(path);
-  if (estMin(len, path.length - 1) > minutes) return [];
+  if (estMin(len, path.length - extra) > minutes) return [];
   while (true) {
     let best = null, bestInc = Infinity, bestPos = -1;
     for (const c of cands) {
       if (used.has(c.id)) continue;
-      let inc = d(path[path.length - 1], c), pos = path.length;
+      let inc = loop ? Infinity : d(path[path.length - 1], c), pos = path.length;
       for (let k = 0; k < path.length - 1; k++) {
         const v = d(path[k], c) + d(c, path[k+1]) - d(path[k], path[k+1]);
         if (v < inc) { inc = v; pos = k + 1; }
       }
       if (inc < bestInc) { bestInc = inc; best = c; bestPos = pos; }
     }
-    if (!best || estMin(len + bestInc, path.length) > minutes) break;
+    if (!best || estMin(len + bestInc, path.length - extra + 1) > minutes) break;
     path.splice(bestPos, 0, best); used.add(best.id); len += bestInc;
   }
-  twoOpt(path, true);
-  return path.slice(1);
+  twoOpt(path, true, loop);
+  return loop ? path.slice(1, -1) : path.slice(1);
 }
 function densityMap(cands, r = 400) {
   const m = new Map();
@@ -1232,7 +1260,8 @@ async function generateRoute(next = false) {
   const origin = originPoint();
   let route = null;
   if (gen.mode === "near") {
-    const reach = gen.minutes * WALK_MPM / DETOUR * .8;
+    const loop = prefs.loop;
+    const reach = gen.minutes * WALK_MPM / DETOUR * (loop ? .45 : .8);
     let cands = candidatesFor(gen.usedIds).filter(v => d(origin, v) < reach);
     if (cands.length < 2 && gen.usedIds.size) { gen.usedIds.clear(); cands = candidatesFor().filter(v => d(origin, v) < reach); }
     if (!cands.length) { routeFail(`There are no unflashed invaders within ${fmtDur(gen.minutes)} of you. Try a longer walk or “Anywhere by public transport”.`); return; }
@@ -1242,15 +1271,15 @@ async function generateRoute(next = false) {
     for (let tries = 0; tries < 6 && stops.length < 2; tries++) {
       const s = gen.sector % 6; gen.sector++;
       const inSector = cands.filter(v => { const b = bearing(origin, v); return d(origin, v) < 120 || (b >= s * 60 && b < s * 60 + 60); })
-        .filter(v => estMin(d(origin, v), 1) < gen.minutes * .6);
+        .filter(v => estMin(d(origin, v) * (loop ? 2 : 1), 1) < gen.minutes * (loop ? .85 : .6));
       if (!inSector.length) continue;
       const first = inSector.reduce((a, b) => (dens.get(b.id) / (1 + d(origin, b) / 300) > dens.get(a.id) / (1 + d(origin, a) / 300) ? b : a));
-      stops = growRoute(origin, cands, gen.minutes, first);
+      stops = growRoute(origin, cands, gen.minutes, first, loop);
     }
-    if (!stops.length) stops = growRoute(origin, cands, gen.minutes);
+    if (!stops.length) stops = growRoute(origin, cands, gen.minutes, null, loop);
     if (!stops.length) { routeFail("Couldn’t fit any invaders into that time. Try a longer walk."); return; }
     stops.forEach(v => gen.usedIds.add(v.id));
-    route = {name: `${fmtDur(gen.minutes)} walk from here`, kind: "gen", start: {...origin, label: "You"}, stops: stops.map(v => v.id)};
+    route = {name: `${fmtDur(gen.minutes)} ${loop ? "loop" : "walk"} from here`, kind: "gen", loop, start: {...origin, label: "You"}, stops: stops.map(v => v.id)};
   } else {
     let cands = candidatesFor().filter(v => d(origin, v) < 25000);
     if (cands.length < 3) cands = candidatesFor().sort((a, b) => d(origin, a) - d(origin, b)).slice(0, 600);
@@ -1259,13 +1288,13 @@ async function generateRoute(next = false) {
     const ranked = cands.slice().sort((a, b) => dens.get(b.id) - dens.get(a.id) || d(origin, a) - d(origin, b));
     const seed = ranked.find(v => gen.usedCells.every(c => d(c, v) > 1500)) || ranked[0];
     gen.usedCells.push({lat: seed.lat, lng: seed.lng});
-    const local = cands.filter(v => d(seed, v) < gen.minutes * WALK_MPM / DETOUR);
+    const local = cands.filter(v => d(seed, v) < gen.minutes * WALK_MPM / DETOUR * (prefs.loop ? .5 : 1));
     const station = await nearestStation(seed);
     const start = station ? {lat: station.lat, lng: station.lng, label: station.name, kind: station.kind} : {lat: seed.lat, lng: seed.lng, label: seed.id};
-    const stops = growRoute(start, local, gen.minutes, station ? null : seed);
+    const stops = growRoute(start, local, gen.minutes, station ? null : seed, prefs.loop);
     if (!stops.length) { routeFail("Couldn’t fit any invaders into that time. Try a longer walk."); return; }
     const area = cities.slice().sort((a, b) => d(a.center, seed) - d(b.center, seed))[0];
-    route = {name: station ? `From ${station.name}` : `${area.name} area`, kind: "gen", transit: true, start, stops: stops.map(v => v.id)};
+    route = {name: (station ? `${prefs.loop ? "Loop" : "From"} ${station.name}` : `${area.name} ${prefs.loop ? "loop" : "area"}`), kind: "gen", transit: true, loop: prefs.loop, start, stops: stops.map(v => v.id)};
   }
   await previewRoute(route);
 }
@@ -1306,7 +1335,7 @@ async function previewRoute(route) {
   setRouteLine(null);
   const stops = route.stops.map(id => BY_ID.get(id));
   setFocus(route.stops.slice()); drawStopMarkers();
-  const pts = route.start ? [route.start, ...stops] : stops;
+  const pts = routePoints(route);
   const b = new maplibregl.LngLatBounds(); pts.forEach(p => b.extend([p.lng, p.lat]));
   map.fitBounds(b, {padding: {top: 90, bottom: Math.round(innerHeight * .5), left: 40, right: 70}, maxZoom: 16.5, duration: 900});
   renderRouteSheet(route, true);
@@ -1316,10 +1345,18 @@ async function previewRoute(route) {
   setRouteLine(w.coords);
   renderRouteSheet(route, false);
 }
+const routeHome = route => route.start || BY_ID.get(route.stops[0]);
+function routePoints(route) {
+  const stops = route.stops.map(id => BY_ID.get(id));
+  const pts = route.start ? [route.start, ...stops] : stops;
+  if (route.loop) pts.push(routeHome(route));
+  return pts;
+}
 function routeTotals(route) {
   const n = route.stops.length;
-  const walkMin = route.walk ? route.walk.duration / 60 : estMin(pathLen(route.stops.map(id => BY_ID.get(id))), 0);
-  const km = route.walk ? route.walk.distance / 1000 : pathLen(route.stops.map(id => BY_ID.get(id))) * DETOUR / 1000;
+  const straight = pathLen(routePoints(route));
+  const walkMin = route.walk ? route.walk.duration / 60 : estMin(straight, 0);
+  const km = route.walk ? route.walk.distance / 1000 : straight * DETOUR / 1000;
   return {n, min: walkMin + n * FIND_MIN, km, pts: route.stops.reduce((s, id) => s + (BY_ID.get(id).pts || 0), 0)};
 }
 function renderRouteSheet(route, loading) {
@@ -1333,6 +1370,7 @@ function renderRouteSheet(route, loading) {
       <div><b>${t.pts}</b><small>points</small></div>
     </div>
     ${route.transit && st ? `<div class="note">Start at <b>${esc(st.label)}</b>${st.kind ? ` (${esc(st.kind)})` : ""}. <a href="${dirLink(st, "r")}" target="_blank" rel="noopener">Get there by public transport</a></div>` : ""}
+    ${route.loop ? `<div class="note">Loop: the walk finishes back ${route.start ? (route.start.label === "You" ? "where you are now" : `at <b>${esc(route.start.label)}</b>`) : `at <b class="px">${esc(route.stops[0])}</b>`}.</div>` : ""}
     ${!loading && route.walk && !route.walk.exact ? `<p class="small">Couldn’t reach the directions service, so times are estimates and the line is straight.</p>` : ""}
     <ol class="stoplist">${route.stops.map((id, i) => { const v = BY_ID.get(id); return `<li><span class="n">${i + 1}</span><span class="id">${esc(id)}</span>${v.pts != null ? `<span>${v.pts} pts</span>` : ""}<small>${esc(v.hint || "")}</small></li>`; }).join("")}</ol>
     <div class="actions">
@@ -1373,11 +1411,13 @@ function openRoutes(tab = routesTab) {
       <input type="range" id="tRange" min="30" max="300" step="15" value="${gen.minutes}" aria-label="Walking time">
       <span class="label">Where should it start?</span>
       <div class="seg" role="group"><button data-mode="near" aria-pressed="${gen.mode === "near"}">Near me</button><button data-mode="transit" aria-pressed="${gen.mode === "transit"}">Anywhere by public transport</button></div>
+      <label class="tog" style="margin-bottom:14px">Loop back to where I started<input type="checkbox" id="loopTog" ${prefs.loop ? "checked" : ""}></label>
       <div class="actions"><button class="btn primary" id="genGo">Generate route</button></div>
-      <p class="small" style="margin:10px 0 18px">Skips invaders you’ve flashed. Tap “Next area” on a route you don’t like to get one somewhere else.</p>
+      <p class="small" style="margin:10px 0 18px">Skips invaders you’ve flashed. Tap “Next area” on a route you don’t like to get one somewhere else. The loop setting also applies when you pick invaders yourself.</p>
       <div class="actions"><button class="btn ghost" id="pickGo">Pick invaders on the map</button></div>`);
     $("#tRange").oninput = e => { gen.minutes = +e.target.value; $("#tLabel").textContent = fmtDur(gen.minutes); store.set("genMinutes", gen.minutes); };
     sheet.querySelectorAll("[data-mode]").forEach(b => b.onclick = () => { gen.mode = b.dataset.mode; sheet.querySelectorAll("[data-mode]").forEach(x => x.setAttribute("aria-pressed", x === b)); });
+    $("#loopTog").onchange = e => { prefs.loop = e.target.checked; savePrefs(); };
     $("#genGo").onclick = () => generateRoute(false);
     $("#pickGo").onclick = startSelecting;
   }
@@ -1393,14 +1433,17 @@ let selecting = false; const picked = [];
 const selbar = $("#selbar");
 function renderSelbar() {
   selbar.innerHTML = `<p>Tap invaders to add them to your route · <b>${picked.length}</b> picked</p>
+    <label class="tog" style="padding:0 0 12px;border:0">Loop back to the start<input type="checkbox" id="selLoop" ${prefs.loop ? "checked" : ""}></label>
     <div class="actions"><button class="btn ghost small" id="selCancel">Cancel</button><button class="btn ghost small" id="selClear" ${picked.length ? "" : "disabled"}>Clear</button>
     <button class="btn blue" id="selGo" ${picked.length ? "" : "disabled"}>Make route</button></div>`;
   $("#selCancel").onclick = stopSelecting;
+  $("#selLoop").onchange = e => { prefs.loop = e.target.checked; savePrefs(); };
   $("#selClear").onclick = () => { picked.length = 0; updateSel(); };
   $("#selGo").onclick = () => {
-    const stops = orderStops(loc.me ? {lat: loc.me.lat, lng: loc.me.lng} : null, picked.slice());
+    const start = loc.me ? {lat: loc.me.lat, lng: loc.me.lng, label: "You"} : null;
+    const stops = orderStops(start, picked.slice(), prefs.loop);
     stopSelecting();
-    previewRoute({name: `My route (${stops.length})`, kind: "custom", start: loc.me ? {lat: loc.me.lat, lng: loc.me.lng, label: "You"} : null, stops: stops.map(v => v.id)});
+    previewRoute({name: `My ${prefs.loop ? "loop" : "route"} (${stops.length})`, kind: "custom", loop: prefs.loop, start, stops: stops.map(v => v.id)});
   };
 }
 function updateSel() {
@@ -1481,7 +1524,8 @@ async function startNav(route, resume = false) {
   if (!resume) { requestAlerts(); if (prefs.voice && "speechSynthesis" in window) try { speechSynthesis.speak(new SpeechSynthesisUtterance(" ")); } catch {} }
   closeSheet();
   current = route;
-  nav = {route, done: new Set(resume?.done || []), skipped: new Set(resume?.skipped || []), remaining: [], legs: [], step: 0, spoken: -1, arrived: null, started: resume?.started || Date.now()};
+  nav = {route, done: new Set(resume?.done || []), skipped: new Set(resume?.skipped || []), remaining: [], legs: [], step: 0, spoken: -1, arrived: null, started: resume?.started || Date.now(),
+    home: route.loop ? routeHome(route) : null};
   nav.remaining = route.stops.filter(id => !nav.done.has(id) && !nav.skipped.has(id));
   saveNav();
   document.body.classList.add("navving");
@@ -1496,6 +1540,7 @@ async function startNav(route, resume = false) {
 async function rerouteNav() {
   if (!nav || !loc.me) return;
   const pts = [{lat: loc.me.lat, lng: loc.me.lng}, ...nav.remaining.map(id => BY_ID.get(id))];
+  if (nav.home) pts.push(nav.home);
   if (pts.length < 2) { finishNav(); return; }
   const w = await fetchWalk(pts);
   if (!nav) return;
@@ -1505,24 +1550,33 @@ async function rerouteNav() {
 }
 function saveNav() {
   if (!nav) { store.del("nav"); return; }
-  store.set("nav", {route: {name: nav.route.name, kind: nav.route.kind, stops: nav.route.stops, start: nav.route.start}, done: [...nav.done], skipped: [...nav.skipped], started: nav.started});
+  store.set("nav", {route: {name: nav.route.name, kind: nav.route.kind, stops: nav.route.stops, start: nav.route.start, loop: !!nav.route.loop}, done: [...nav.done], skipped: [...nav.skipped], started: nav.started});
+}
+/* where the walker is heading now: the next invader, or (on a loop) back to the start */
+function navTarget() {
+  const id = nav?.remaining[0];
+  if (id) { const v = BY_ID.get(id); return {id, label: id, lat: v.lat, lng: v.lng, v}; }
+  if (nav?.home) return {home: true, label: "the start", lat: nav.home.lat, lng: nav.home.lng};
+  return null;
 }
 function currentInstruction() {
   if (!nav || !loc.me) return null;
-  const id = nav.remaining[0]; if (!id) return null;
-  const v = BY_ID.get(id), leg = nav.legs[0];
+  const tg = navTarget(); if (!tg) return null;
+  const leg = nav.legs[0];
   if (!leg || !leg.steps.length) {
-    const b = bearing(loc.me, v);
-    return {text: `Head ${cardinal(b)} to ${id}`, dist: distM(loc.me, v), arrow: "straight", rot: b - (loc.heading ?? 0)};
+    const b = bearing(loc.me, tg);
+    return {text: `Head ${cardinal(b)} to ${tg.label}`, dist: distM(loc.me, tg), arrow: "straight", rot: b - (loc.heading ?? 0)};
   }
   const s = leg.steps[Math.min(nav.step + 1, leg.steps.length - 1)];
-  return {text: stepText(s, id), dist: distM(loc.me, ll(s.loc)), arrow: arrowFor(s), rot: 0, idx: nav.step + 1};
+  return {text: stepText(s, tg.label), dist: distM(loc.me, ll(s.loc)), arrow: arrowFor(s), rot: 0, idx: nav.step + 1};
 }
 function navTick() {
-  if (!nav || !loc.me || !nav.remaining.length) return;
-  const id = nav.remaining[0], v = BY_ID.get(id);
-  const dStop = distM(loc.me, v);
-  if (dStop < 35 && nav.arrived !== id) {
+  if (!nav || !loc.me) return;
+  const tg = navTarget(); if (!tg) return;
+  const id = tg.id, v = tg.v;
+  const dStop = distM(loc.me, tg);
+  if (tg.home && dStop < 40) { finishNav(); return; }
+  if (v && dStop < 35 && nav.arrived !== id) {
     nav.arrived = id;
     alertUser(`You’re at ${id}`, v.hint ? `Look around: ${v.hint}` : "Look around for it!", `You’ve reached ${id.replace("_", " ")}. Look around for it.`);
   }
@@ -1550,13 +1604,22 @@ function offRoute() {
 function remainingMinutes() {
   return nav.legs.reduce((s, l) => s + l.duration / 60, 0) + nav.remaining.length * FIND_MIN;
 }
+const SPEAKER_ON = `<svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 9v6h4l5 4V5L8 9H4z" fill="currentColor"/><path d="M16.5 8.5a5 5 0 0 1 0 7M19 6a8.5 8.5 0 0 1 0 12"/></svg>`;
+const SPEAKER_OFF = `<svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 9v6h4l5 4V5L8 9H4z" fill="currentColor"/><path d="m17 9 5 6M22 9l-5 6"/></svg>`;
+function setVoice(on) {
+  prefs.voice = on; savePrefs();
+  if (!on) try { speechSynthesis.cancel(); } catch {}
+  toast(on ? "Spoken directions on" : "Spoken directions muted");
+}
 function renderNav(status) {
   if (!nav) { navEl.classList.remove("open"); return; }
   navEl.classList.add("open");
-  const id = nav.remaining[0], v = id && BY_ID.get(id);
+  const tg = navTarget();
+  const id = tg?.id, v = tg?.v;
   const total = nav.route.stops.length, doneN = nav.done.size + nav.skipped.size;
   const ins = currentInstruction();
   const here = v && loc.me && distM(loc.me, v) < 35;
+  const homeward = tg?.home;
   navEl.innerHTML = `
     <div class="nav-top">
       <svg viewBox="0 0 24 24" style="transform:rotate(${here ? 0 : (ins?.rot || 0).toFixed(0)}deg)"><path fill="currentColor" d="${ARROWS[here ? "pin" : ins?.arrow || "straight"]}"/></svg>
@@ -1565,14 +1628,18 @@ function renderNav(status) {
         <div class="nav-dist">${status ? "" : here ? esc(v.hint || "Look around for it!") : ins ? fmtDist(ins.dist) : ""}</div>
       </div>
     </div>
-    <div class="nav-next"><span>Next</span><b>${esc(id || "—")}</b><span>${v && loc.me ? fmtDist(distM(loc.me, v)) : ""}</span><span>${doneN + 1} of ${total} · ${fmtDur(remainingMinutes())} left</span></div>
+    <div class="nav-next">${homeward
+      ? `<span>Heading back to the start</span><span>${loc.me ? fmtDist(distM(loc.me, tg)) : ""} · ${fmtDur(remainingMinutes())} left</span>`
+      : `<span>Next</span><b>${esc(id || "—")}</b><span>${v && loc.me ? fmtDist(distM(loc.me, v)) : ""}</span><span>${doneN + 1} of ${total} · ${fmtDur(remainingMinutes())} left</span>`}</div>
     <div class="actions">
-      <button class="btn primary" id="nFlash">Flashed it</button>
-      <button class="btn ghost small" id="nSkip">Skip</button>
+      ${homeward ? `<button class="btn primary" id="nFinish">Finish here</button>` :
+        `<button class="btn primary" id="nFlash">Flashed it</button><button class="btn ghost small" id="nSkip">Skip</button>`}
+      <button class="btn ghost small" id="nMute" aria-label="${prefs.voice ? "Mute spoken directions" : "Turn spoken directions on"}" aria-pressed="${!prefs.voice}">${prefs.voice ? SPEAKER_ON : SPEAKER_OFF}</button>
       <button class="btn ghost small" id="nMore" aria-label="More options">•••</button>
     </div>`;
-  $("#nFlash").onclick = () => advanceNav(true);
-  $("#nSkip").onclick = () => advanceNav(false);
+  if (homeward) $("#nFinish").onclick = finishNav;
+  else { $("#nFlash").onclick = () => advanceNav(true); $("#nSkip").onclick = () => advanceNav(false); }
+  $("#nMute").onclick = () => { setVoice(!prefs.voice); renderNav(); };
   $("#nMore").onclick = openNavMenu;
 }
 function advanceNav(gotIt) {
@@ -1580,7 +1647,13 @@ function advanceNav(gotIt) {
   if (gotIt) { nav.done.add(id); setFlashed(id, true); } else nav.skipped.add(id);
   nav.legs.shift(); nav.step = 0; nav.spoken = -1; nav.arrived = null;
   saveNav(); drawStopMarkers();
-  if (!nav.remaining.length) { finishNav(); return; }
+  if (!nav.remaining.length) {
+    if (!nav.home) { finishNav(); return; }
+    alertUser(gotIt ? `${id} flashed!` : `Skipped ${id}`, "That’s all of them. Heading back to the start.", "That’s all of them! Now let’s head back to the start.");
+    if (gotIt) toast(`${id} flashed 👾`);
+    renderNav(); rerouteNav();
+    return;
+  }
   const ins = currentInstruction();
   alertUser(gotIt ? `${id} flashed!` : `Skipped ${id}`, `Next: ${nav.remaining[0]}`, `${gotIt ? "Nice one." : "Skipped."} Next up, ${nav.remaining[0].replace("_", " ")}. ${ins?.text || ""}`);
   if (gotIt) toast(`${id} flashed 👾`);
@@ -1589,14 +1662,14 @@ function advanceNav(gotIt) {
 }
 function openNavMenu() {
   openSheet("navmenu", head("Route options") + `
-    <label class="tog">Spoken directions<input type="checkbox" id="oVoice" ${prefs.voice ? "checked" : ""}></label>
+    <label class="tog">Spoken directions (turn off to mute)<input type="checkbox" id="oVoice" ${prefs.voice ? "checked" : ""}></label>
     <label class="tog">Notifications when the app is in the background<input type="checkbox" id="oAlerts" ${prefs.alerts ? "checked" : ""}></label>
     <p class="small" style="margin:10px 0 14px">${IS_IOS ? "On iPhone, websites can’t keep giving directions once the screen is locked, so keep Invader Radar open. The screen will stay on while you walk." : "Keep the app open for the most reliable directions."}</p>
     <div class="actions">
       <button class="btn ghost" id="oReroute">Re-plan from here</button>
       <button class="btn ghost" id="oEnd" style="color:#e5484d">End route</button>
     </div>`);
-  $("#oVoice").onchange = e => { prefs.voice = e.target.checked; savePrefs(); };
+  $("#oVoice").onchange = e => { setVoice(e.target.checked); renderNav(); };
   $("#oAlerts").onchange = e => { prefs.alerts = e.target.checked; savePrefs(); if (prefs.alerts) requestAlerts(); };
   $("#oReroute").onclick = () => { closeSheet(); renderNav("Re-planning…"); rerouteNav(); };
   $("#oEnd").onclick = () => { closeSheet(); endNav(); };
@@ -1619,27 +1692,105 @@ function endNav() {
   if (pendingUpdate) location.reload();
 }
 
-/* ================= first-visit install guide ================= */
-function showInstall(force) {
-  const m = $("#modal"), card = m.querySelector(".card");
-  const shareIco = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12M8 7l4-4 4 4"/><path d="M6 11H5a1 1 0 0 0-1 1v8a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-8a1 1 0 0 0-1-1h-1"/></svg>`;
-  card.innerHTML = `<div class="modal-ico" id="mIco"></div>
-    <h3>Put Invader Radar on your Home Screen</h3>
-    <p>It opens full screen like a normal app and updates itself whenever the website changes.</p>
-    <ol>
-      <li><span>Tap the <b>Share</b> button ${shareIco} in Safari. On newer iPhones it’s in the <b>•••</b> menu next to the address bar.</span></li>
-      <li><span>Scroll down and tap <b>Add to Home Screen</b>.</span></li>
-      <li><span>Leave <b>Open as Web App</b> switched on (if you see it) and tap <b>Add</b>.</span></li>
-    </ol>
-    <p style="font-size:14px">Do this before you mark anything as flashed. The Home Screen app keeps its own copy of your data, separate from Safari.</p>
-    <div class="actions"><button class="btn primary" id="mOk">Got it</button></div>`;
-  card.querySelector("#mIco").appendChild(drawInvader(document.createElement("canvas"), "#e0218a", {scale: 4, outline: null}));
-  m.classList.add("open");
-  const close = () => { m.classList.remove("open"); store.set("installSeen", true); };
-  $("#mOk").onclick = close;
-  m.onclick = e => { if (e.target === m) close(); };
+/* ================= first-run intro & Home Screen guide ================= */
+const ICO = {
+  share: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12M8 7l4-4 4 4"/><path d="M6 11H5a1 1 0 0 0-1 1v8a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-8a1 1 0 0 0-1-1h-1"/></svg>`,
+  more: `<svg viewBox="0 0 24 24" fill="currentColor"><circle cx="5" cy="12" r="2"/><circle cx="12" cy="12" r="2"/><circle cx="19" cy="12" r="2"/></svg>`,
+  add: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><rect x="3" y="3" width="18" height="18" rx="4"/><path d="M12 8v8M8 12h8"/></svg>`,
+  safari: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="m15.5 8.5-2 5-5 2 2-5z" fill="currentColor"/></svg>`,
+  arrow: `<svg viewBox="0 0 24 24" fill="currentColor"><path d="M20.5 3.5 3.8 10.6c-.6.3-.5 1.2.1 1.3l7.1 1.3 1.3 7.1c.1.7 1 .8 1.3.1L20.5 3.5Z"/></svg>`,
+  route: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="6" cy="19" r="2.2"/><circle cx="18" cy="5" r="2.2"/><path d="M8.2 19H15a3.5 3.5 0 0 0 0-7H9a3.5 3.5 0 0 1 0-7h6.8"/></svg>`,
+  layers: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><path d="M12 3 2 8l10 5 10-5-10-5Z"/><path d="m2 13 10 5 10-5"/></svg>`,
+  speaker: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 9v6h4l5 4V5L8 9H4z" fill="currentColor"/><path d="m17 9 5 6M22 9l-5 6"/></svg>`
+};
+const modal = $("#modal");
+function openModal(html, onClose) {
+  const card = modal.querySelector(".card");
+  card.innerHTML = html; card.scrollTop = 0;
+  modal.classList.add("open");
+  modal.onclick = e => { if (e.target === modal) { modal.classList.remove("open"); onClose?.(); } };
+  return card;
 }
-if (IS_IOS && !STANDALONE && !store.get("installSeen", false)) setTimeout(() => showInstall(), 800);
+const closeModal = () => modal.classList.remove("open");
+const bigIcon = (svgOrCanvas, bg = "#1a1528", color = "#fff") => `<div class="modal-ico" style="background:${bg};color:${color}">${svgOrCanvas || ""}</div>`;
+
+function showIntro() {
+  const offerInstall = IS_IOS && !STANDALONE;
+  const legend = [0, 1, 2].map(i => `<span class="ilg" data-c="${i}"></span>`).join("");
+  const pages = [
+    {icon: bigIcon(""), invader: true, title: "Welcome to Invader Radar",
+     body: `<p>A map of the little space-invader mosaics that the street artist Invader has stuck on walls in cities all over the world, with walking routes to help you find as many as possible.</p>`},
+    {icon: bigIcon("", "#e0218a"), invader: "#ffffff", title: "Tap an invader",
+     body: `<p>Every invader on the map is a real mosaic.</p><div class="ilegend">${legend}</div>
+       <p>Tap one to see its points, a hint about where it is and directions. When you’ve found it, tap <b>Mark as flashed</b> and it fades out.</p>`},
+    {icon: bigIcon(ICO.arrow, "#007aff"), title: "See where you are",
+     body: `<p>Tap the arrow in the top-right corner and allow location. A blue dot shows where you are, just like in Apple Maps.</p><p>Tap the arrow again and the map turns with you as you face different directions.</p>`},
+    {icon: bigIcon(ICO.route, "#34c759"), title: "Plan a walk",
+     body: `<p>Open <b>Routes</b> to pick a ready-made walk, or make one that fits the time you have. You can start near you or at a station, and choose to loop back to where you began.</p>
+       <p>While you walk, the app tells you where to turn. Tap the speaker ${`<span class="inl">${ICO.speaker}</span>`} to mute it.</p>`},
+    {icon: bigIcon(ICO.layers, "#7a5af5"), title: "Already playing Flash Invaders?",
+     body: `<p>Take screenshots of your gallery in the Flash Invaders app, then go to the layers button → <b>Import from Flash Invaders</b>. Everything you’ve already flashed gets marked for you.</p>`}
+  ];
+  if (offerInstall) pages.push({icon: bigIcon(ICO.add, "#007aff"), title: "Add it to your Home Screen",
+    body: `<p>Put Invader Radar on your Home Screen so it opens like a normal app, full screen, and always has the newest version.</p><p>It takes about a minute and we’ll show you each step.</p>`,
+    last: "Show me how"});
+  let i = 0;
+  const done = () => { store.set("introSeen", true); store.set("installSeen", true); closeModal(); };
+  const render = () => {
+    const pg = pages[i], final = i === pages.length - 1;
+    const card = openModal(`
+      <div class="intro-top"><span class="dots">${pages.map((_, k) => `<i class="${k === i ? "on" : ""}"></i>`).join("")}</span>
+        <button class="skip" id="iSkip">Skip</button></div>
+      ${pg.icon}<h3>${pg.title}</h3><div class="intro-body">${pg.body}</div>
+      <div class="actions">
+        ${i > 0 ? `<button class="btn ghost" id="iBack">Back</button>` : ""}
+        <button class="btn primary" id="iNext">${final ? (pg.last || "Start exploring") : "Next"}</button>
+      </div>
+      ${final && pg.last ? `<div class="actions" style="margin-top:10px"><button class="btn ghost" id="iLater">Maybe later</button></div>` : ""}`, done);
+    if (pg.invader) card.querySelector(".modal-ico").appendChild(drawInvader(document.createElement("canvas"), pg.invader === true ? "#e0218a" : pg.invader, {scale: 4, outline: null}));
+    card.querySelectorAll(".ilg").forEach(sp => {
+      const c = +sp.dataset.c;
+      sp.append(drawInvader(document.createElement("canvas"), S_COLOR[c], {scale: 3, outline: null}), ["Ready to flash", "Damaged", "Destroyed"][c]);
+    });
+    $("#iSkip").onclick = done;
+    if ($("#iBack")) $("#iBack").onclick = () => { i--; render(); };
+    $("#iNext").onclick = () => {
+      if (!final) { i++; render(); return; }
+      done();
+      if (pg.last) showInstall();
+    };
+    if ($("#iLater")) $("#iLater").onclick = done;
+  };
+  render();
+}
+
+function showInstall() {
+  const card = openModal(`
+    ${bigIcon(ICO.add, "#007aff")}
+    <h3>Add Invader Radar to your Home Screen</h3>
+    <p class="intro-lead">Follow these steps on this iPhone. Take your time: you can scroll down to read them all first.</p>
+    <ol class="guide">
+      <li><div><b>Make sure you’re in Safari</b>
+        <p>Safari is the app with the blue compass ${`<span class="inl">${ICO.safari}</span>`}. If you opened this link from another app, such as Messages, WhatsApp or Gmail, look for <b>Open in Safari</b> (sometimes under ${`<span class="inl">${ICO.more}</span>`} or the compass icon) and tap it first.</p></div></li>
+      <li><div><b>Find the Share button</b>
+        <p>It looks like a square with an arrow pointing up ${`<span class="inl">${ICO.share}</span>`}. It’s usually in the bar at the <b>bottom</b> of the screen (at the top on an iPad).</p>
+        <p>Can’t see it? On newer iPhones, tap the three dots ${`<span class="inl">${ICO.more}</span>`} in the bottom corner first, then tap <b>Share</b>.</p>
+        <p>If the bottom bar has disappeared, scroll up a little or tap the very bottom of the screen and it will come back.</p></div></li>
+      <li><div><b>Open the full list of options</b>
+        <p>A panel slides up from the bottom. If you see a button called <b>View More</b> or <b>Show More</b>, tap it so you can see every option.</p></div></li>
+      <li><div><b>Scroll down to “Add to Home Screen”</b>
+        <p>Put your finger on the list and slide it upwards to scroll down. Keep going until you see <b>Add to Home Screen</b> with this icon ${`<span class="inl">${ICO.add}</span>`}, then tap it.</p>
+        <p>Still can’t find it? Scroll to the very bottom, tap <b>Edit Actions…</b>, then tap the green <b>+</b> next to Add to Home Screen and tap <b>Done</b>.</p></div></li>
+      <li><div><b>Tap “Add”</b>
+        <p>You’ll see the name <b>Invaders</b> and a small pink invader icon. If there’s a switch called <b>Open as Web App</b>, leave it on (green). Then tap <b>Add</b> in the top-right corner.</p></div></li>
+      <li><div><b>Open it from your Home Screen</b>
+        <p>Go back to your Home Screen (swipe up from the bottom edge, or press the Home button). The new <b>Invaders</b> icon is usually on your last page of apps. From now on, open Invader Radar by tapping that icon.</p></div></li>
+    </ol>
+    <div class="note">Do this before you mark invaders as flashed. The Home Screen app keeps its own copy of your saved invaders, separate from Safari. Already marked some? Use <b>Back up</b> here and <b>Restore</b> in the new app (both are under the layers button).</div>
+    <div class="actions"><button class="btn primary" id="mOk">Got it</button></div>`, () => store.set("installSeen", true));
+  $("#mOk").onclick = () => { store.set("installSeen", true); closeModal(); };
+}
+if (!store.get("introSeen", false)) setTimeout(showIntro, 700);
 
 /* ================= resume a route after an update or reopening ================= */
 const savedNav = store.get("nav", null);
